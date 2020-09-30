@@ -1,0 +1,58 @@
+name: Docker Image CI
+
+on:
+  push:
+    branches: 
+      - '*'
+env:
+  RC_NAME: davidtnfsh/scala_project_template
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@master
+      - name: Login to docker hub
+        uses: actions-hub/docker/login@master
+        env:
+          DOCKER_USERNAME: ${{ secrets.DOCKER_USERNAME }}
+          DOCKER_PASSWORD: ${{ secrets.DOCKER_PASSWORD }}
+
+      - name: Pull cache
+        run: |
+          docker login -u ${{ secrets.DOCKER_USERNAME }} -p ${{ secrets.DOCKER_PASSWORD }}
+          docker pull ${RC_NAME}:cache
+          docker pull ${RC_NAME}:spark
+
+      - name: Build image to compile JAR
+        if: always()
+        run: |
+          docker build --rm --cache-from ${RC_NAME}:cache -t ${RC_NAME}:cache .
+          docker tag ${RC_NAME}:cache ${RC_NAME}:latest
+
+      - name: Build image to test JAR
+        run: |
+          docker build --rm --cache-from ${RC_NAME}:spark -t ${RC_NAME}:spark -f Dockerfile.spark .
+
+      - name: Run end-to-end testing
+        run: |
+          # run spark container to test our JAR
+          docker run --rm -i ${RC_NAME}:spark bash -c "sh /usr/local/seqslab/SeqPiper/test.sh"
+          [ $? -eq 0 ] || exit 1
+
+      - name: Push Cache to docker registry
+        uses: actions-hub/docker@master
+        if: always()
+        with:
+          args: push ${RC_NAME}:cache
+
+      - name: Push Cache to docker registry
+        uses: actions-hub/docker@master
+        if: always()
+        with:
+          args: push ${RC_NAME}:spark
+
+      - name: Push to docker registry
+        uses: actions-hub/docker@master
+        if: (github.ref == 'refs/heads/databricks-production' || github.ref == 'refs/heads/prod') && success()
+        with:
+          args: push ${RC_NAME}:latest
